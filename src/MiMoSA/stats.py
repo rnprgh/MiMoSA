@@ -95,6 +95,9 @@ class Stats:
         'sg_filter_rdp',
     }
     TABLE_1_VERTICAL_COLUMNS = ['Parameter', 'Value']
+    VELOCITY_TABLE_1_VERTICAL_COLUMNS = [
+        'Parameter', 'Value', 'n', 'n_definition',
+    ]
     ANGULAR_MSD_DR_PARAMETER = 'Dr (rad²/s)'
     STEP_METRIC_COLUMNS = [
         'source_dataframe',
@@ -435,10 +438,10 @@ class Stats:
         'total_unclassified_interval_seconds',
         'tumble_time_fraction',
         'tumble_frequency_per_second',
-        'mean_run_speed',
-        'std_run_speed',
-        'mean_tumble_speed',
-        'std_tumble_speed',
+        'point_mean_run_speed',
+        'point_std_run_speed',
+        'point_mean_tumble_speed',
+        'point_std_tumble_speed',
         'mean_run_interval_seconds',
         'std_run_interval_seconds',
         'mean_tumble_interval_seconds',
@@ -449,23 +452,26 @@ class Stats:
         'std_run_angular_velocity_magnitude_radians_per_second',
         'mean_tumble_angular_velocity_magnitude_radians_per_second',
         'std_tumble_angular_velocity_magnitude_radians_per_second',
-        'v_R',
-        'v_R_sample_count',
-        'v_R_support_seconds',
-        'v_T',
-        'v_T_sample_count',
-        'v_T_support_seconds',
+        'time_weighted_vR',
+        'vR_interval_count',
+        'vR_support_seconds',
+        'time_weighted_vT',
+        'vT_interval_count',
+        'vT_support_seconds',
         't_R',
         'std_t_R',
         'sem_t_R',
         't_R_interval_count',
         't_R_censored_interval_count',
         't_T',
+        'std_t_T',
         't_T_interval_count',
         't_T_censored_interval_count',
         'p',
+        'std_p',
         'p_direction_change_count',
         'R',
+        'std_R',
         'R_run_transition_count',
         'distance_unit',
         'speed_unit',
@@ -509,10 +515,10 @@ class Stats:
         'std_number_of_runs_per_particle',
         'mean_number_of_tumbles_per_particle',
         'std_number_of_tumbles_per_particle',
-        'mean_run_speed',
-        'std_run_speed_between_particles',
-        'mean_tumble_speed',
-        'std_tumble_speed_between_particles',
+        'particle_mean_point_run_speed',
+        'particle_std_point_run_speed',
+        'particle_mean_point_tumble_speed',
+        'particle_std_point_tumble_speed',
         'mean_run_interval_seconds',
         'std_run_interval_seconds_between_particles',
         'mean_tumble_interval_seconds',
@@ -523,28 +529,39 @@ class Stats:
         'std_run_angular_velocity_between_particles',
         'mean_tumble_angular_velocity_magnitude_radians_per_second',
         'std_tumble_angular_velocity_between_particles',
-        'v_R',
-        'v_R_sample_count',
-        'v_R_support_seconds',
-        'v_T',
-        'v_T_sample_count',
-        'v_T_support_seconds',
+        'pooled_time_weighted_vR',
+        'pooled_time_weighted_vR_ci_lower',
+        'pooled_time_weighted_vR_ci_upper',
+        'vR_interval_count',
+        'vR_support_seconds',
+        'vR_particle_count',
+        'pooled_time_weighted_vT',
+        'pooled_time_weighted_vT_ci_lower',
+        'pooled_time_weighted_vT_ci_upper',
+        'vT_interval_count',
+        'vT_support_seconds',
+        'vT_particle_count',
         't_R',
         'std_t_R',
         'sem_t_R',
         't_R_interval_count',
         't_R_censored_interval_count',
         't_T',
+        'std_t_T',
         't_T_interval_count',
         't_T_censored_interval_count',
         'p',
+        'std_p',
         'p_direction_change_count',
         'R',
+        'std_R',
         'R_run_transition_count',
-        'mean_particle_v_R',
-        'std_particle_v_R',
-        'mean_particle_v_T',
-        'std_particle_v_T',
+        'particle_mean_time_weighted_vR',
+        'particle_std_time_weighted_vR',
+        'particle_sem_time_weighted_vR',
+        'particle_mean_time_weighted_vT',
+        'particle_std_time_weighted_vT',
+        'particle_sem_time_weighted_vT',
         'mean_particle_t_R',
         'std_particle_t_R',
         'mean_particle_t_T',
@@ -574,6 +591,9 @@ class Stats:
         'persistence_interval_seconds',
         'run_direction_fit_points',
         'max_frame_gap',
+        'pooled_speed_bootstrap_resamples',
+        'pooled_speed_bootstrap_confidence_level',
+        'pooled_speed_bootstrap_random_seed',
     ]
     FITTED_MEAN_SPEED_COLUMNS = [
         'source_dataframe',
@@ -732,7 +752,7 @@ class Stats:
             columns=self.VELOCITY_TUMBLE_POPULATION_COLUMNS
         )
         self._velocity_tumble_table_1_dataframe = pd.DataFrame(
-            columns=self.TABLE_1_VERTICAL_COLUMNS
+            columns=self.VELOCITY_TABLE_1_VERTICAL_COLUMNS
         )
         self._velocity_tumble_analysis_metadata: dict = {}
         self._speed_feature_particles_dataframe = pd.DataFrame()
@@ -3123,7 +3143,10 @@ class Stats:
         persistence_interval_seconds: float = 1 / 6,
         run_direction_fit_points: int = 4,
         distance_unit: str = 'scale_units',
-        max_frame_gap: int | None = 1
+        max_frame_gap: int | None = 1,
+        bootstrap_resamples: int = 10_000,
+        bootstrap_confidence_level: float = 0.95,
+        bootstrap_random_seed: int | None = 0
     ) -> tuple[
         pd.DataFrame,
         pd.DataFrame,
@@ -3169,7 +3192,8 @@ class Stats:
         observed time with excluded inter-segment gaps omitted.
         Backward-difference velocity is assigned to its ending frame; the point
         table records the preceding frame and angular-heading support explicitly.
-        The Table 1 quantities are also reported as ``v_R``, ``v_T``, ``t_R``,
+        The Table 1 quantities are also reported as
+        ``pooled_time_weighted_vR``, ``pooled_time_weighted_vT``, ``t_R``,
         ``t_T``, ``p``, and ``R``. Directional persistence ``p`` is the mean
         cosine of within-run heading changes over
         ``persistence_interval_seconds``. Consecutive-run persistence ``R`` is
@@ -3183,6 +3207,18 @@ class Stats:
         dataframe.
         ``t_R`` and ``t_T`` use complete episodes; boundary-censored episode
         counts are retained in explicit diagnostic columns.
+        ``point_mean_run_speed`` and ``point_mean_tumble_speed`` average all
+        finite point speeds carrying the corresponding state label equally.
+        ``time_weighted_vR`` and ``time_weighted_vT`` instead use only
+        same-state intervals and weight their ending-point speeds by elapsed
+        interval duration; state-transition intervals contribute to neither.
+        Uncertainty for ``pooled_time_weighted_vR`` and
+        ``pooled_time_weighted_vT`` is estimated with percentile
+        particle-cluster bootstrap confidence intervals. Each resample draws
+        contributing particles with replacement and recomputes the pooled,
+        speed-time-weighted value. Equal-particle speed means are accompanied
+        by their between-particle sample standard deviations and standard
+        errors.
 
         Args:
             particle_ids: Optional particle ID or collection of IDs.
@@ -3242,21 +3278,38 @@ class Stats:
                 elapsed times. The default of 1 best matches the paper's
                 uniformly sampled trajectories; larger values apply the
                 selected smoother to retained detections.
+            bootstrap_resamples: Number of whole-particle resamples used for
+                percentile confidence intervals around pooled time-weighted
+                ``vR`` and ``vT``. Must be at least 2.
+            bootstrap_confidence_level: Central percentile confidence level for
+                pooled time-weighted ``vR`` and ``vT``. Must be strictly
+                between 0 and 1.
+            bootstrap_random_seed: Nonnegative seed for reproducible particle-
+                cluster resampling. None requests nondeterministic entropy.
 
         Returns:
             tuple[pd.DataFrame, ...]:
                 Per-particle summaries, detected tumble events, point-level
                 kinematics/classifications, a population summary, and a
                 vertical Najafi Table 1-style dataframe. The particle and
-                population tables include the paper's Table 1 columns
-                ``v_R``, ``v_T``, ``t_R``, ``t_T``, ``p``, and ``R``.
+                population tables include the Table 1 quantities
+                ``time_weighted_vR``, ``time_weighted_vT``, ``t_R``, ``t_T``,
+                ``p``, and ``R``. The population table uses
+                ``pooled_time_weighted_vR`` and
+                ``pooled_time_weighted_vT`` for the pooled speed quantities.
                 The vertical table also includes ``Dr (rad²/s)`` from the
                 run-only rotational mean-square-displacement fit.
                 Population Table 1 values are pooled using their speed-time,
                 complete-episode, direction-pair, or run-transition support;
-                equal-particle means and standard deviations are separate.
-                The requested ``t_R`` sample SD and SEM use all complete,
-                uncensored run episodes.
+                pooled speeds include particle-cluster bootstrap confidence
+                intervals. Equal-particle speed means, sample standard
+                deviations, and standard errors are separate.
+                The ``t_R`` sample SD and SEM use all complete, uncensored run
+                episodes. Sample SDs for ``t_T``, ``p``, and ``R`` use all
+                contributing complete tumble episodes, within-run direction
+                pairs, and fitted run transitions, respectively. Every vertical
+                table row includes ``n`` and an explanation of its sample unit;
+                low-sample uncertainty rows explain why their value is blank.
         """
         self._velocity_tumble_summary_dataframe = pd.DataFrame(
             columns=self.VELOCITY_TUMBLE_SUMMARY_COLUMNS
@@ -3271,7 +3324,7 @@ class Stats:
             columns=self.VELOCITY_TUMBLE_POPULATION_COLUMNS
         )
         self._velocity_tumble_table_1_dataframe = pd.DataFrame(
-            columns=self.TABLE_1_VERTICAL_COLUMNS
+            columns=self.VELOCITY_TABLE_1_VERTICAL_COLUMNS
         )
         self._velocity_tumble_analysis_metadata = {}
 
@@ -3405,6 +3458,33 @@ class Stats:
             raise ValueError(
                 'run_direction_fit_points must be at least 2.'
             )
+        self.__validate_positive_integer(
+            bootstrap_resamples, 'bootstrap_resamples'
+        )
+        bootstrap_resamples = int(bootstrap_resamples)
+        if bootstrap_resamples < 2:
+            raise ValueError('bootstrap_resamples must be at least 2.')
+        if isinstance(
+            bootstrap_confidence_level, (bool, np.bool_)
+        ) or not isinstance(
+            bootstrap_confidence_level,
+            (int, float, np.integer, np.floating)
+        ):
+            raise TypeError('bootstrap_confidence_level must be numeric.')
+        bootstrap_confidence_level = float(bootstrap_confidence_level)
+        if (
+            not np.isfinite(bootstrap_confidence_level) or
+            not 0 < bootstrap_confidence_level < 1
+        ):
+            raise ValueError(
+                'bootstrap_confidence_level must be finite and strictly '
+                'between 0 and 1.'
+            )
+        if bootstrap_random_seed is not None:
+            self.__validate_nonnegative_integer(
+                bootstrap_random_seed, 'bootstrap_random_seed'
+            )
+            bootstrap_random_seed = int(bootstrap_random_seed)
 
         self.__validate_frame_rate()
         normalized_max_gap = self.__normalize_max_frame_gap(max_frame_gap)
@@ -3618,7 +3698,10 @@ class Stats:
                     persistence_interval_seconds
                 ),
                 run_direction_fit_points=run_direction_fit_points,
-                max_frame_gap=normalized_max_gap
+                max_frame_gap=normalized_max_gap,
+                bootstrap_resamples=bootstrap_resamples,
+                bootstrap_confidence_level=bootstrap_confidence_level,
+                bootstrap_random_seed=bootstrap_random_seed
             )
         )
         angular_msd_fit = self.__calculate_velocity_run_angular_msd(
@@ -3688,6 +3771,11 @@ class Stats:
             'extrema_min_distance': extrema_min_distance,
             'persistence_interval_seconds': persistence_interval_seconds,
             'run_direction_fit_points': run_direction_fit_points,
+            'pooled_speed_bootstrap_resamples': bootstrap_resamples,
+            'pooled_speed_bootstrap_confidence_level': (
+                bootstrap_confidence_level
+            ),
+            'pooled_speed_bootstrap_random_seed': bootstrap_random_seed,
             'distance_factor': distance_factor,
             'distance_unit': distance_unit_label,
             'speed_unit': speed_unit_label,
@@ -3735,14 +3823,35 @@ class Stats:
                 'reported as censored and excluded from these means.'
             ),
             'table_1_population_rule': (
-                'v_R, v_T, t_R, t_T, p, and R are pooled using their actual '
-                'support; equal-particle means and standard deviations are '
-                'reported separately.'
+                'pooled_time_weighted_vR, pooled_time_weighted_vT, t_R, t_T, '
+                'p, and R are pooled using their actual support; '
+                'equal-particle means, sample standard deviations, and '
+                'standard errors are reported separately.'
+            ),
+            'pooled_speed_bootstrap_rule': (
+                'Pooled time-weighted vR and vT confidence intervals use a '
+                'percentile particle-cluster bootstrap. Each replicate '
+                'samples whole state-contributing particles with replacement '
+                'and recomputes the duration-weighted pooled speed.'
             ),
             'table_1_t_R_uncertainty_rule': (
                 'std_t_R is the sample SD across all complete uncensored run '
                 'episodes; sem_t_R is std_t_R divided by the square root of '
                 'their total count.'
+            ),
+            'table_1_uncertainty_rule': (
+                'std_t_R and std_t_T are sample SDs across complete uncensored '
+                'run and tumble episodes. std_p and std_R are sample SDs across '
+                'supported within-run direction cosines and fitted run-to-run '
+                'transition cosines. sem_t_R is std_t_R divided by the square '
+                'root of the complete-run count. Sample SD and SEM require at '
+                'least two contributing observations.'
+            ),
+            'table_1_sample_count_rule': (
+                'Every vertical Table 1 row records n and n_definition. n is '
+                'the metric-specific observation, particle-cluster, episode, '
+                'direction-pair, transition, lag-bin, or dataset count; '
+                'configuration and status rows mark n as not applicable.'
             ),
             'angular_msd_rule': (
                 'Within each particle and segment, finite headings are split '
@@ -3859,6 +3968,12 @@ class Stats:
         override those defaults for this plot only.
 
         Args:
+            metric: Canonical per-particle result field to plot. Velocity
+                choices include ``point_mean_run_speed``,
+                ``point_mean_tumble_speed``, ``time_weighted_vR``, and
+                ``time_weighted_vT``. The former ``mean_run_speed``,
+                ``mean_tumble_speed``, ``v_R``, and ``v_T`` spellings remain
+                accepted as plotting aliases.
             show_particle_ID: Label every Cartesian or polar bar with its
                 corresponding particle ID.
             color: A Matplotlib color, colormap name, or Colormap object. A
@@ -4151,6 +4266,12 @@ class Stats:
                 'Run calculate_velocity_tumble_statistics before plotting '
                 'velocity-based tumble metrics.'
             )
+        metric = {
+            'mean_run_speed': 'point_mean_run_speed',
+            'mean_tumble_speed': 'point_mean_tumble_speed',
+            'v_R': 'time_weighted_vR',
+            'v_T': 'time_weighted_vT',
+        }.get(metric, metric)
         speed_unit = self.__plot_unit_label(
             tumble_summary['speed_unit'].iloc[0]
         )
@@ -4161,11 +4282,11 @@ class Stats:
             'mean_time_between_tumble_starts_seconds': (
                 'Mean time between tumble starts (s)'
             ),
-            'mean_run_speed': (
-                f'Unweighted mean run speed ({speed_unit})'
+            'point_mean_run_speed': (
+                f'Point-mean run speed ({speed_unit})'
             ),
-            'mean_tumble_speed': (
-                f'Unweighted mean tumble speed ({speed_unit})'
+            'point_mean_tumble_speed': (
+                f'Point-mean tumble speed ({speed_unit})'
             ),
             'mean_run_interval_seconds': (
                 'Mean run interval including censored boundaries (s)'
@@ -4179,8 +4300,8 @@ class Stats:
             'mean_tumble_angular_velocity_magnitude_radians_per_second': (
                 'Mean tumble angular-velocity magnitude (rad/s)'
             ),
-            'v_R': f'Running mean velocity, v_R ({speed_unit})',
-            'v_T': f'Tumbling mean velocity, v_T ({speed_unit})',
+            'time_weighted_vR': f'Time-weighted vR ({speed_unit})',
+            'time_weighted_vT': f'Time-weighted vT ({speed_unit})',
             't_R': 'Mean complete run time, t_R (s)',
             't_T': 'Mean complete tumble time, t_T (s)',
             'p': 'Run directional persistence, p',
@@ -7552,7 +7673,7 @@ class Stats:
             columns=self.VELOCITY_TUMBLE_POPULATION_COLUMNS
         )
         self._velocity_tumble_table_1_dataframe = pd.DataFrame(
-            columns=self.TABLE_1_VERTICAL_COLUMNS
+            columns=self.VELOCITY_TABLE_1_VERTICAL_COLUMNS
         )
         self._velocity_tumble_analysis_metadata = {}
         self._speed_feature_particles_dataframe = pd.DataFrame()
@@ -8723,25 +8844,31 @@ class Stats:
                 run_transition_cosines.append(directional_cosine)
 
         return {
-            'v_R': time_weighted_mean(
+            'time_weighted_vR': time_weighted_mean(
                 run_speed_values, run_speed_durations
             ),
-            'v_R_sample_count': int(len(run_speed_values)),
-            'v_R_support_seconds': float(np.sum(run_speed_durations)),
-            'v_T': time_weighted_mean(
+            'vR_interval_count': int(len(run_speed_values)),
+            'vR_support_seconds': float(np.sum(run_speed_durations)),
+            'time_weighted_vT': time_weighted_mean(
                 tumble_speed_values, tumble_speed_durations
             ),
-            'v_T_sample_count': int(len(tumble_speed_values)),
-            'v_T_support_seconds': float(
+            'vT_interval_count': int(len(tumble_speed_values)),
+            'vT_support_seconds': float(
                 np.sum(tumble_speed_durations)
             ),
             'p': self.__safe_mean(
+                np.asarray(persistence_cosines, dtype=float)
+            ),
+            'std_p': self.__safe_std(
                 np.asarray(persistence_cosines, dtype=float)
             ),
             'p_direction_change_count': int(
                 len(persistence_cosines)
             ),
             'R': self.__safe_mean(
+                np.asarray(run_transition_cosines, dtype=float)
+            ),
+            'std_R': self.__safe_std(
                 np.asarray(run_transition_cosines, dtype=float)
             ),
             'R_run_transition_count': int(
@@ -9020,10 +9147,10 @@ class Stats:
                 number_of_tumbles / classified_tracking_time
                 if classified_tracking_time > 0 else np.nan
             ),
-            'mean_run_speed': self.__safe_mean(run_speeds),
-            'std_run_speed': self.__safe_std(run_speeds),
-            'mean_tumble_speed': self.__safe_mean(tumble_speeds),
-            'std_tumble_speed': self.__safe_std(tumble_speeds),
+            'point_mean_run_speed': self.__safe_mean(run_speeds),
+            'point_std_run_speed': self.__safe_std(run_speeds),
+            'point_mean_tumble_speed': self.__safe_mean(tumble_speeds),
+            'point_std_tumble_speed': self.__safe_std(tumble_speeds),
             'mean_run_interval_seconds': self.__safe_mean(
                 run_intervals_array
             ),
@@ -9054,12 +9181,12 @@ class Stats:
             'std_tumble_angular_velocity_magnitude_radians_per_second': (
                 self.__safe_std(tumble_angular_velocities)
             ),
-            'v_R': table_metrics['v_R'],
-            'v_R_sample_count': table_metrics['v_R_sample_count'],
-            'v_R_support_seconds': table_metrics['v_R_support_seconds'],
-            'v_T': table_metrics['v_T'],
-            'v_T_sample_count': table_metrics['v_T_sample_count'],
-            'v_T_support_seconds': table_metrics['v_T_support_seconds'],
+            'time_weighted_vR': table_metrics['time_weighted_vR'],
+            'vR_interval_count': table_metrics['vR_interval_count'],
+            'vR_support_seconds': table_metrics['vR_support_seconds'],
+            'time_weighted_vT': table_metrics['time_weighted_vT'],
+            'vT_interval_count': table_metrics['vT_interval_count'],
+            'vT_support_seconds': table_metrics['vT_support_seconds'],
             't_R': self.__safe_mean(complete_run_intervals_array),
             'std_t_R': self.__safe_std(complete_run_intervals_array),
             'sem_t_R': self.__safe_sem(complete_run_intervals_array),
@@ -9070,6 +9197,7 @@ class Stats:
                 censored_run_interval_count
             ),
             't_T': self.__safe_mean(complete_tumble_intervals_array),
+            'std_t_T': self.__safe_std(complete_tumble_intervals_array),
             't_T_interval_count': int(
                 len(complete_tumble_intervals_array)
             ),
@@ -9077,10 +9205,12 @@ class Stats:
                 censored_tumble_interval_count
             ),
             'p': table_metrics['p'],
+            'std_p': table_metrics['std_p'],
             'p_direction_change_count': table_metrics[
                 'p_direction_change_count'
             ],
             'R': table_metrics['R'],
+            'std_R': table_metrics['std_R'],
             'R_run_transition_count': table_metrics[
                 'R_run_transition_count'
             ],
@@ -9124,7 +9254,10 @@ class Stats:
         extrema_min_distance: int,
         persistence_interval_seconds: float,
         run_direction_fit_points: int,
-        max_frame_gap: int | None
+        max_frame_gap: int | None,
+        bootstrap_resamples: int = 10_000,
+        bootstrap_confidence_level: float = 0.95,
+        bootstrap_random_seed: int | None = 0
     ) -> pd.DataFrame:
         """Build pooled Table 1 and equal-particle velocity summaries."""
         def metric_values(column_name: str) -> np.ndarray:
@@ -9154,6 +9287,53 @@ class Stats:
 
         def total_support(column_name: str) -> float:
             return float(np.sum(metric_values(column_name)))
+
+        def contributing_particle_count(
+            value_column: str,
+            weight_column: str
+        ) -> int:
+            values = pd.to_numeric(
+                tumble_summary[value_column], errors='coerce'
+            ).to_numpy(dtype=float)
+            weights = pd.to_numeric(
+                tumble_summary[weight_column], errors='coerce'
+            ).to_numpy(dtype=float)
+            return int(np.sum(
+                np.isfinite(values) & np.isfinite(weights) & (weights > 0)
+            ))
+
+        bootstrap_seed_sequence = np.random.SeedSequence(
+            bootstrap_random_seed
+        )
+        run_bootstrap_seed, tumble_bootstrap_seed = (
+            bootstrap_seed_sequence.spawn(2)
+        )
+        v_R_ci_lower, v_R_ci_upper = (
+            self.__particle_cluster_bootstrap_weighted_mean_ci(
+                values=pd.to_numeric(
+                    tumble_summary['time_weighted_vR'], errors='coerce'
+                ).to_numpy(dtype=float),
+                weights=pd.to_numeric(
+                    tumble_summary['vR_support_seconds'], errors='coerce'
+                ).to_numpy(dtype=float),
+                resamples=bootstrap_resamples,
+                confidence_level=bootstrap_confidence_level,
+                random_generator=np.random.default_rng(run_bootstrap_seed)
+            )
+        )
+        v_T_ci_lower, v_T_ci_upper = (
+            self.__particle_cluster_bootstrap_weighted_mean_ci(
+                values=pd.to_numeric(
+                    tumble_summary['time_weighted_vT'], errors='coerce'
+                ).to_numpy(dtype=float),
+                weights=pd.to_numeric(
+                    tumble_summary['vT_support_seconds'], errors='coerce'
+                ).to_numpy(dtype=float),
+                resamples=bootstrap_resamples,
+                confidence_level=bootstrap_confidence_level,
+                random_generator=np.random.default_rng(tumble_bootstrap_seed)
+            )
+        )
 
         particle_count = int(len(tumble_summary))
         total_runs = int(
@@ -9190,6 +9370,54 @@ class Stats:
             ).to_numpy(dtype=float),
             pd.to_numeric(
                 tumble_summary['t_R_interval_count'], errors='coerce'
+            ).to_numpy(dtype=float)
+        )
+        (
+            pooled_t_T,
+            pooled_t_T_std,
+            _,
+            pooled_t_T_count,
+        ) = self.__combine_group_mean_std_sem(
+            pd.to_numeric(
+                tumble_summary['t_T'], errors='coerce'
+            ).to_numpy(dtype=float),
+            pd.to_numeric(
+                tumble_summary['std_t_T'], errors='coerce'
+            ).to_numpy(dtype=float),
+            pd.to_numeric(
+                tumble_summary['t_T_interval_count'], errors='coerce'
+            ).to_numpy(dtype=float)
+        )
+        (
+            pooled_p,
+            pooled_p_std,
+            _,
+            pooled_p_count,
+        ) = self.__combine_group_mean_std_sem(
+            pd.to_numeric(
+                tumble_summary['p'], errors='coerce'
+            ).to_numpy(dtype=float),
+            pd.to_numeric(
+                tumble_summary['std_p'], errors='coerce'
+            ).to_numpy(dtype=float),
+            pd.to_numeric(
+                tumble_summary['p_direction_change_count'], errors='coerce'
+            ).to_numpy(dtype=float)
+        )
+        (
+            pooled_R,
+            pooled_R_std,
+            _,
+            pooled_R_count,
+        ) = self.__combine_group_mean_std_sem(
+            pd.to_numeric(
+                tumble_summary['R'], errors='coerce'
+            ).to_numpy(dtype=float),
+            pd.to_numeric(
+                tumble_summary['std_R'], errors='coerce'
+            ).to_numpy(dtype=float),
+            pd.to_numeric(
+                tumble_summary['R_run_transition_count'], errors='coerce'
             ).to_numpy(dtype=float)
         )
         smoothing_output = self.__smoothing_configuration_output(
@@ -9251,17 +9479,17 @@ class Stats:
             'std_number_of_tumbles_per_particle': self.__safe_std(
                 metric_values('number_of_tumbles')
             ),
-            'mean_run_speed': self.__safe_mean(
-                metric_values('mean_run_speed')
+            'particle_mean_point_run_speed': self.__safe_mean(
+                metric_values('point_mean_run_speed')
             ),
-            'std_run_speed_between_particles': self.__safe_std(
-                metric_values('mean_run_speed')
+            'particle_std_point_run_speed': self.__safe_std(
+                metric_values('point_mean_run_speed')
             ),
-            'mean_tumble_speed': self.__safe_mean(
-                metric_values('mean_tumble_speed')
+            'particle_mean_point_tumble_speed': self.__safe_mean(
+                metric_values('point_mean_tumble_speed')
             ),
-            'std_tumble_speed_between_particles': self.__safe_std(
-                metric_values('mean_tumble_speed')
+            'particle_std_point_tumble_speed': self.__safe_std(
+                metric_values('point_mean_tumble_speed')
             ),
             'mean_run_interval_seconds': self.__safe_mean(
                 metric_values('mean_run_interval_seconds')
@@ -9305,19 +9533,33 @@ class Stats:
                     'mean_tumble_angular_velocity_magnitude_radians_per_second'
                 )
             ),
-            'v_R': pooled_metric('v_R', 'v_R_support_seconds'),
-            'v_R_sample_count': int(total_support(
-                'v_R_sample_count'
-            )),
-            'v_R_support_seconds': total_support(
-                'v_R_support_seconds'
+            'pooled_time_weighted_vR': pooled_metric(
+                'time_weighted_vR', 'vR_support_seconds'
             ),
-            'v_T': pooled_metric('v_T', 'v_T_support_seconds'),
-            'v_T_sample_count': int(total_support(
-                'v_T_sample_count'
+            'pooled_time_weighted_vR_ci_lower': v_R_ci_lower,
+            'pooled_time_weighted_vR_ci_upper': v_R_ci_upper,
+            'vR_interval_count': int(total_support(
+                'vR_interval_count'
             )),
-            'v_T_support_seconds': total_support(
-                'v_T_support_seconds'
+            'vR_support_seconds': total_support(
+                'vR_support_seconds'
+            ),
+            'vR_particle_count': contributing_particle_count(
+                'time_weighted_vR', 'vR_support_seconds'
+            ),
+            'pooled_time_weighted_vT': pooled_metric(
+                'time_weighted_vT', 'vT_support_seconds'
+            ),
+            'pooled_time_weighted_vT_ci_lower': v_T_ci_lower,
+            'pooled_time_weighted_vT_ci_upper': v_T_ci_upper,
+            'vT_interval_count': int(total_support(
+                'vT_interval_count'
+            )),
+            'vT_support_seconds': total_support(
+                'vT_support_seconds'
+            ),
+            'vT_particle_count': contributing_particle_count(
+                'time_weighted_vT', 'vT_support_seconds'
             ),
             't_R': pooled_t_R,
             'std_t_R': pooled_t_R_std,
@@ -9326,32 +9568,35 @@ class Stats:
             't_R_censored_interval_count': int(total_support(
                 't_R_censored_interval_count'
             )),
-            't_T': pooled_metric('t_T', 't_T_interval_count'),
-            't_T_interval_count': int(total_support(
-                't_T_interval_count'
-            )),
+            't_T': pooled_t_T,
+            'std_t_T': pooled_t_T_std,
+            't_T_interval_count': pooled_t_T_count,
             't_T_censored_interval_count': int(total_support(
                 't_T_censored_interval_count'
             )),
-            'p': pooled_metric('p', 'p_direction_change_count'),
-            'p_direction_change_count': int(total_support(
-                'p_direction_change_count'
-            )),
-            'R': pooled_metric('R', 'R_run_transition_count'),
-            'R_run_transition_count': int(total_support(
-                'R_run_transition_count'
-            )),
-            'mean_particle_v_R': self.__safe_mean(
-                metric_values('v_R')
+            'p': pooled_p,
+            'std_p': pooled_p_std,
+            'p_direction_change_count': pooled_p_count,
+            'R': pooled_R,
+            'std_R': pooled_R_std,
+            'R_run_transition_count': pooled_R_count,
+            'particle_mean_time_weighted_vR': self.__safe_mean(
+                metric_values('time_weighted_vR')
             ),
-            'std_particle_v_R': self.__safe_std(
-                metric_values('v_R')
+            'particle_std_time_weighted_vR': self.__safe_std(
+                metric_values('time_weighted_vR')
             ),
-            'mean_particle_v_T': self.__safe_mean(
-                metric_values('v_T')
+            'particle_sem_time_weighted_vR': self.__safe_sem(
+                metric_values('time_weighted_vR')
             ),
-            'std_particle_v_T': self.__safe_std(
-                metric_values('v_T')
+            'particle_mean_time_weighted_vT': self.__safe_mean(
+                metric_values('time_weighted_vT')
+            ),
+            'particle_std_time_weighted_vT': self.__safe_std(
+                metric_values('time_weighted_vT')
+            ),
+            'particle_sem_time_weighted_vT': self.__safe_sem(
+                metric_values('time_weighted_vT')
             ),
             'mean_particle_t_R': self.__safe_mean(
                 metric_values('t_R')
@@ -9397,6 +9642,11 @@ class Stats:
             ),
             'run_direction_fit_points': run_direction_fit_points,
             'max_frame_gap': max_frame_gap,
+            'pooled_speed_bootstrap_resamples': bootstrap_resamples,
+            'pooled_speed_bootstrap_confidence_level': (
+                bootstrap_confidence_level
+            ),
+            'pooled_speed_bootstrap_random_seed': bootstrap_random_seed,
         }
         return pd.DataFrame(
             [population_row],
@@ -9617,73 +9867,256 @@ class Stats:
             numeric_value = float(numeric_value)
             return numeric_value if np.isfinite(numeric_value) else np.nan
 
-        rows = [
-            {'Parameter': 'Strain', 'Value': self._strain},
-            {
-                'Parameter': f'vR ({speed_unit})',
-                'Value': population_value('v_R'),
-            },
-            {
-                'Parameter': f'vT ({speed_unit})',
-                'Value': population_value('v_T'),
-            },
-            {
-                'Parameter': 'Mean tR (s)',
-                'Value': population_value('t_R'),
-            },
-            {
-                'Parameter': '±std',
-                'Value': population_value('std_t_R'),
-            },
-            {
-                'Parameter': '±sem',
-                'Value': population_value('sem_t_R'),
-            },
-            {
-                'Parameter': 'Mean tT (s)',
-                'Value': population_value('t_T'),
-            },
-            {'Parameter': 'p', 'Value': population_value('p')},
-            {'Parameter': 'R', 'Value': population_value('R')},
-            {
-                'Parameter': self.ANGULAR_MSD_DR_PARAMETER,
-                'Value': angular_msd_fit[
-                    'rotational_diffusion_coefficient_'
-                    'radians_squared_per_second'
-                ],
-            },
-            {
-                'Parameter': 'Dr fit max lag (s)',
-                'Value': angular_msd_fit[
-                    'angular_msd_fit_max_lag_seconds'
-                ],
-            },
-            {
-                'Parameter': 'Dr largest fitted lag (s)',
-                'Value': angular_msd_fit[
-                    'angular_msd_largest_fitted_lag_seconds'
-                ],
-            },
-            {
-                'Parameter': 'Dr fit lag count',
-                'Value': angular_msd_fit['angular_msd_fit_lag_count'],
-            },
-            {
-                'Parameter': 'Dr fit direction-pair count',
-                'Value': angular_msd_fit[
-                    'angular_msd_fit_direction_pair_count'
-                ],
-            },
-            {
-                'Parameter': 'Dr fit uncentered R^2',
-                'Value': angular_msd_fit['angular_msd_fit_r_squared'],
-            },
-            {
-                'Parameter': 'Dr fit status',
-                'Value': angular_msd_fit['angular_msd_fit_status'],
-            },
-        ]
-        return pd.DataFrame(rows, columns=self.TABLE_1_VERTICAL_COLUMNS)
+        def population_count(column_name: str) -> int:
+            value = population_value(column_name)
+            return int(value) if np.isfinite(value) else 0
+
+        def sample_sd_definition(description: str, sample_count: int) -> str:
+            if sample_count < 2:
+                return (
+                    f'{description}; sample SD not calculated because n='
+                    f'{sample_count}, but at least 2 observations are required'
+                )
+            return f'{description}; sample SD calculated with ddof=1'
+
+        def sem_definition(description: str, sample_count: int) -> str:
+            if sample_count < 2:
+                return (
+                    f'{description}; SEM not calculated because n='
+                    f'{sample_count}, but at least 2 observations are required'
+                )
+            return f'{description}; SEM is sample SD / sqrt(n)'
+
+        rows: list[dict] = []
+
+        def append_row(
+            parameter: str,
+            value: object,
+            sample_count: int | float = np.nan,
+            n_definition: str = 'not applicable'
+        ) -> None:
+            rows.append({
+                'Parameter': parameter,
+                'Value': value,
+                'n': sample_count,
+                'n_definition': n_definition,
+            })
+
+        particle_count = population_count('particle_count')
+        run_speed_count = population_count('vR_interval_count')
+        run_particle_count = population_count('vR_particle_count')
+        tumble_speed_count = population_count('vT_interval_count')
+        tumble_particle_count = population_count('vT_particle_count')
+        run_interval_count = population_count('t_R_interval_count')
+        tumble_interval_count = population_count('t_T_interval_count')
+        persistence_count = population_count('p_direction_change_count')
+        run_transition_count = population_count('R_run_transition_count')
+        fit_lag_count = int(angular_msd_fit['angular_msd_fit_lag_count'])
+
+        append_row(
+            'Strain', self._strain, particle_count,
+            'particles represented in the population summary'
+        )
+        append_row(
+            f'pooled_time_weighted_vR ({speed_unit})',
+            population_value('pooled_time_weighted_vR'), run_speed_count,
+            'finite run-state speed intervals; pooled mean is weighted by '
+            'their elapsed-time support'
+        )
+        speed_ci_definition = (
+            'particles with finite time_weighted_vR and positive run support; '
+            'whole '
+            'particles are resampled as bootstrap clusters'
+        )
+        append_row(
+            f'pooled_time_weighted_vR_ci_lower ({speed_unit})',
+            population_value('pooled_time_weighted_vR_ci_lower'),
+            run_particle_count,
+            speed_ci_definition
+        )
+        append_row(
+            f'pooled_time_weighted_vR_ci_upper ({speed_unit})',
+            population_value('pooled_time_weighted_vR_ci_upper'),
+            run_particle_count,
+            speed_ci_definition
+        )
+        run_particle_definition = (
+            'particles with finite time_weighted_vR; each particle '
+            'contributes one equal-weight value'
+        )
+        append_row(
+            f'particle_mean_time_weighted_vR ({speed_unit})',
+            population_value('particle_mean_time_weighted_vR'),
+            run_particle_count,
+            run_particle_definition
+        )
+        append_row(
+            f'particle_std_time_weighted_vR ({speed_unit})',
+            population_value('particle_std_time_weighted_vR'),
+            run_particle_count,
+            sample_sd_definition(
+                run_particle_definition, int(run_particle_count)
+            )
+        )
+        append_row(
+            f'particle_sem_time_weighted_vR ({speed_unit})',
+            population_value('particle_sem_time_weighted_vR'),
+            run_particle_count,
+            sem_definition(run_particle_definition, int(run_particle_count))
+        )
+        append_row(
+            f'pooled_time_weighted_vT ({speed_unit})',
+            population_value('pooled_time_weighted_vT'), tumble_speed_count,
+            'finite tumble-state speed intervals; pooled mean is weighted by '
+            'their elapsed-time support'
+        )
+        tumble_speed_ci_definition = (
+            'particles with finite time_weighted_vT and positive tumble '
+            'support; whole particles are resampled as bootstrap clusters'
+        )
+        append_row(
+            f'pooled_time_weighted_vT_ci_lower ({speed_unit})',
+            population_value('pooled_time_weighted_vT_ci_lower'),
+            tumble_particle_count,
+            tumble_speed_ci_definition
+        )
+        append_row(
+            f'pooled_time_weighted_vT_ci_upper ({speed_unit})',
+            population_value('pooled_time_weighted_vT_ci_upper'),
+            tumble_particle_count,
+            tumble_speed_ci_definition
+        )
+        tumble_particle_definition = (
+            'particles with finite time_weighted_vT; each particle '
+            'contributes one equal-weight value'
+        )
+        append_row(
+            f'particle_mean_time_weighted_vT ({speed_unit})',
+            population_value('particle_mean_time_weighted_vT'),
+            tumble_particle_count,
+            tumble_particle_definition
+        )
+        append_row(
+            f'particle_std_time_weighted_vT ({speed_unit})',
+            population_value('particle_std_time_weighted_vT'),
+            tumble_particle_count,
+            sample_sd_definition(
+                tumble_particle_definition, int(tumble_particle_count)
+            )
+        )
+        append_row(
+            f'particle_sem_time_weighted_vT ({speed_unit})',
+            population_value('particle_sem_time_weighted_vT'),
+            tumble_particle_count,
+            sem_definition(
+                tumble_particle_definition, int(tumble_particle_count)
+            )
+        )
+        for parameter in (
+            'pooled_speed_bootstrap_resamples',
+            'pooled_speed_bootstrap_confidence_level',
+            'pooled_speed_bootstrap_random_seed',
+        ):
+            append_row(
+                parameter, population_value(parameter), np.nan,
+                'not applicable; this row is a bootstrap configuration value'
+            )
+        run_interval_definition = 'complete uncensored run episodes'
+        append_row(
+            'Mean tR (s)', population_value('t_R'), run_interval_count,
+            run_interval_definition
+        )
+        append_row(
+            '±std', population_value('std_t_R'), run_interval_count,
+            sample_sd_definition(
+                run_interval_definition, int(run_interval_count)
+            )
+        )
+        append_row(
+            '±sem', population_value('sem_t_R'), run_interval_count,
+            sem_definition(run_interval_definition, int(run_interval_count))
+        )
+        tumble_interval_definition = 'complete uncensored tumble episodes'
+        append_row(
+            'Mean tT (s)', population_value('t_T'), tumble_interval_count,
+            tumble_interval_definition
+        )
+        append_row(
+            'std_t_T (s)', population_value('std_t_T'),
+            tumble_interval_count,
+            sample_sd_definition(
+                tumble_interval_definition, int(tumble_interval_count)
+            )
+        )
+        persistence_definition = (
+            'supported within-run direction-change cosine observations'
+        )
+        append_row(
+            'p', population_value('p'), persistence_count,
+            persistence_definition
+        )
+        append_row(
+            'std_p', population_value('std_p'), persistence_count,
+            sample_sd_definition(
+                persistence_definition, int(persistence_count)
+            )
+        )
+        transition_definition = (
+            'supported fitted run-to-run transition cosine observations'
+        )
+        append_row(
+            'R', population_value('R'), run_transition_count,
+            transition_definition
+        )
+        append_row(
+            'std_R', population_value('std_R'), run_transition_count,
+            sample_sd_definition(
+                transition_definition, int(run_transition_count)
+            )
+        )
+        append_row(
+            self.ANGULAR_MSD_DR_PARAMETER,
+            angular_msd_fit[
+                'rotational_diffusion_coefficient_radians_squared_per_second'
+            ],
+            fit_lag_count,
+            'run-only angular-MSD lag-bin means in the origin-constrained fit'
+        )
+        append_row(
+            'Dr fit max lag (s)',
+            angular_msd_fit['angular_msd_fit_max_lag_seconds'],
+            population_count('total_number_of_runs'),
+            'reconstructed run intervals used to calculate the requested fit '
+            'ceiling, including boundary-censored runs'
+        )
+        append_row(
+            'Dr largest fitted lag (s)',
+            angular_msd_fit['angular_msd_largest_fitted_lag_seconds'],
+            fit_lag_count,
+            'run-only angular-MSD lag-bin means retained in the fit'
+        )
+        append_row(
+            'Dr fit lag count', fit_lag_count, np.nan,
+            'not applicable; the Value is the number of fitted lag bins'
+        )
+        append_row(
+            'Dr fit direction-pair count',
+            angular_msd_fit['angular_msd_fit_direction_pair_count'], np.nan,
+            'not applicable; the Value is the total direction-pair support '
+            'summed over fitted lag bins'
+        )
+        append_row(
+            'Dr fit uncentered R^2',
+            angular_msd_fit['angular_msd_fit_r_squared'], fit_lag_count,
+            'run-only angular-MSD lag-bin means retained in the fit'
+        )
+        append_row(
+            'Dr fit status', angular_msd_fit['angular_msd_fit_status'], np.nan,
+            'not applicable; this row reports fit status or failure reason'
+        )
+        return pd.DataFrame(
+            rows, columns=self.VELOCITY_TABLE_1_VERTICAL_COLUMNS
+        )
 
     @staticmethod
     def __normalize_max_frame_gap(max_frame_gap: int | None) -> int | None:
@@ -9796,6 +10229,46 @@ class Stats:
             pd.Series(values), errors='coerce'
         ).to_numpy(dtype=float)
         return numeric_values[np.isfinite(numeric_values)]
+
+    @staticmethod
+    def __particle_cluster_bootstrap_weighted_mean_ci(
+        values: np.ndarray,
+        weights: np.ndarray,
+        resamples: int,
+        confidence_level: float,
+        random_generator: np.random.Generator
+    ) -> tuple[float, float]:
+        """Return a percentile CI after resampling contributing particles."""
+        values = np.asarray(values, dtype=float)
+        weights = np.asarray(weights, dtype=float)
+        valid = (
+            np.isfinite(values) &
+            np.isfinite(weights) &
+            (weights > 0)
+        )
+        values = values[valid]
+        weights = weights[valid]
+        particle_count = len(values)
+        if particle_count < 2:
+            return np.nan, np.nan
+
+        bootstrap_means = np.empty(resamples, dtype=float)
+        for resample_index in range(resamples):
+            sampled_indices = random_generator.integers(
+                0, particle_count, size=particle_count
+            )
+            sampled_weights = weights[sampled_indices]
+            bootstrap_means[resample_index] = float(
+                np.sum(values[sampled_indices] * sampled_weights) /
+                np.sum(sampled_weights)
+            )
+
+        tail_probability = (1.0 - confidence_level) / 2.0
+        lower, upper = np.quantile(
+            bootstrap_means,
+            [tail_probability, 1.0 - tail_probability]
+        )
+        return float(lower), float(upper)
 
     @staticmethod
     def __safe_mean(values: np.ndarray) -> float:
@@ -12412,7 +12885,8 @@ class Stats:
             './02_Outputs/05_Basic_Stats/'
         ),
         file_extension: str = 'png',
-        show: bool = True
+        show: bool = True,
+        show_n: bool = False
     ) -> tuple:
         """
         Plot the overall mean speed distribution.
@@ -12442,6 +12916,8 @@ class Stats:
                 from the Stats output directory.
             file_extension: Automatic-save format: 'png' or 'tif'.
             show: Whether to display the histogram interactively.
+            show_n: Whether to show the number of cells in a legend within
+                the plot area.
         Returns:
             tuple: ``(figure, axis)`` for the histogram.
         """
@@ -12453,6 +12929,7 @@ class Stats:
             raise TypeError('bins must be an integer.')
         if bins < 1:
             raise ValueError('bins must be at least 1.')
+        self.__validate_boolean_argument(show_n, 'show_n')
         plotting_parameters = self.__validate_basic_plotting_parameters(
             title=title,
             title_fontsize=title_fontsize,
@@ -12482,8 +12959,20 @@ class Stats:
         mean_array = mean_array[np.isfinite(mean_array)]
         if mean_array.size == 0:
             raise ValueError('No finite mean speeds are available to plot.')
-        ax.hist(mean_array, bins=bins, density=False,
-                alpha=0.7, label='Mean Speeds')
+        _, _, histogram_patches = ax.hist(
+            mean_array, bins=bins, density=False,
+            alpha=0.7, label='Mean Speeds'
+        )
+        if show_n:
+            legend_font = plotting_parameters['font_family']
+            ax.legend(
+                handles=[histogram_patches[0]],
+                labels=[f'n = {mean_array.size}'],
+                prop=(
+                    {'family': legend_font.strip()}
+                    if legend_font is not None else None
+                )
+            )
         default_title = 'Overall Fitted Mean Speed Distribution'
         display_speed_unit = self.__plot_unit_label(speed_unit_label)
         ax.set_xlabel(f'Fitted Mean Speed ({display_speed_unit})')

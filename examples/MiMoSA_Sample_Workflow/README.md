@@ -3,8 +3,10 @@
 `01_MiMoSA_Sample_Walkthrough.ipynb` demonstrates capture,
 segmentation, feature measurement, advanced tracking, manual track updates,
 overlays, statistics, and additional analyses. It contains the reviewed
-execution output from the Dubnau Lab source run. The retained output reports
-851 frames, while the bundled publication inputs contain a 100-frame excerpt;
+execution output from the Dubnau Lab source run. Velocity-analysis cells whose
+saved results used the 0.1.0 column schema are intentionally cleared and must
+be regenerated with MiMoSA 0.2.0. The remaining retained output reports 851
+frames, while the bundled publication inputs contain a 100-frame excerpt;
 rerunning on the distributed excerpt will therefore produce different
 observation counts.
 

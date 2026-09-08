@@ -13,7 +13,16 @@ notebook is intentionally unexecuted. Each configured input may be a complete
 tracking-run folder or its `02_Outputs` folder. The folder must contain the
 statistics CSV files needed by the requested comparisons. See
 [`../../docs/STATS_EXPORTED_DATA_FILES_SUMMARY.md`](../../docs/STATS_EXPORTED_DATA_FILES_SUMMARY.md)
-for the export schemas and file locations.
+for the export inventory and
+[`../../docs/STATS_VELOCITY_BASED_ANALYSIS_PARAMETERS.md`](../../docs/STATS_VELOCITY_BASED_ANALYSIS_PARAMETERS.md)
+for the velocity schema, aggregation definitions, and legacy-name map.
+
+Current velocity comparisons report both equal-particle and
+classified-duration-weighted tumble-time fractions, explicitly distinguish
+point, time-weighted, pooled, and equal-particle speed estimands, and use a
+fixed whole-particle bootstrap seed in the example. Documented legacy velocity
+columns are normalized in memory when older CSVs are loaded; source files are
+not rewritten automatically.
 
 Edit `runs_root` and `runs` in the first configuration cell. Every entry must
 have this form:

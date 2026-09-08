@@ -974,7 +974,9 @@ class Identify:
         long_single_cells, candidate_linked_pairs, and longer_chains are assigned
         when three consecutive modes have compatible length and area ratios. A
         longer-chain range is added only when the following mode also has compatible
-        scaling.
+        scaling. When fewer than 20 valid observations are available, mixture
+        modeling and classification are skipped and a histogram-only analysis is
+        returned.
 
         Args:
             dataframe (pd.DataFrame | None): Optional region-properties or linked-particle
@@ -987,19 +989,13 @@ class Identify:
             max_components (int): Maximum components considered during automatic selection.
             min_component_fraction (float): Minimum fraction required for each biologically
                 labeled component.
-            show_plot (bool): Whether to display the fitted distribution and ranges.
+            show_plot (bool): Whether to display the histogram, fitted distribution,
+                and ranges available for the sample size.
 
         Returns:
             dict: Analysis metadata, component_summary, classification_ranges,
                 classified_dataframe, support diagnostics, and the optional figure.
         """
-        try:
-            from sklearn.mixture import GaussianMixture  # type: ignore
-        except ImportError as error:
-            raise ImportError(
-                'scikit-learn is required to analyze major-axis-length distributions.'
-            ) from error
-
         if isinstance(max_components, bool) or not isinstance(max_components, (int, np.integer)):
             raise TypeError('max_components must be an integer.')
         if max_components < 1:
@@ -1075,6 +1071,108 @@ class Identify:
         ].copy()
 
         values = analysis_dataframe[length_column].to_numpy(dtype=float)
+        if len(values) == 0:
+            raise ValueError(
+                'No valid positive major-axis-length observations are available.'
+            )
+
+        pixel_scale_factor = float(self._parent.get_pixel_scale_factor())
+        has_valid_scale = np.isfinite(pixel_scale_factor) and pixel_scale_factor > 0
+        scale_units = self._parent.get_scale_units() or 'scale_units'
+        component_column = f'{length_column}_component'
+        class_column = f'{length_column}_class'
+
+        if len(values) < 20:
+            analysis_dataframe[component_column] = pd.Series(
+                pd.NA,
+                index=analysis_dataframe.index,
+                dtype='Int64'
+            )
+            analysis_dataframe[class_column] = 'insufficient_observations'
+            support_messages = [
+                'Fewer than 20 valid major-axis-length observations were '
+                'available; mixture modeling and morphology classification '
+                'were skipped.'
+            ]
+            analysis_warnings = [
+                'Histogram-only analysis was used because mixture modeling '
+                'requires at least 20 valid observations.'
+            ]
+            if component_count is not None:
+                analysis_warnings.append(
+                    'component_count was ignored for the histogram-only analysis.'
+                )
+            if not aggregate_by_particle and particle_column in source_dataframe.columns:
+                analysis_warnings.append(
+                    'Linked-track rows are detection-weighted. Use '
+                    'aggregate_by_particle=True to give each particle equal weight.'
+                )
+
+            figure = None
+            if show_plot:
+                figure, axis = plt.subplots(figsize=(12, 6))
+                histogram_bin_count = max(
+                    1,
+                    int(np.ceil(np.sqrt(len(values))))
+                )
+                axis.hist(
+                    values,
+                    bins=histogram_bin_count,
+                    alpha=0.55,
+                    color='#4C78A8',
+                    edgecolor='white',
+                    label='Observations'
+                )
+                axis.set_xlabel('Major-axis length (pixels)')
+                axis.set_ylabel('Count')
+                axis.set_title(
+                    f'Major-axis-length distribution '
+                    f'({len(values):,} {analysis_unit}s)\n'
+                    'Histogram only; fewer than 20 observations'
+                )
+                axis.legend(frameon=False)
+
+                if has_valid_scale:
+                    secondary_axis = axis.secondary_xaxis(
+                        'top',
+                        functions=(
+                            lambda pixel_value: pixel_value * pixel_scale_factor,
+                            lambda scale_value: scale_value / pixel_scale_factor
+                        )
+                    )
+                    secondary_axis.set_xlabel(
+                        f'Major-axis length ({scale_units})')
+
+                plt.tight_layout()
+                plt.show()
+
+            print(
+                f'Analyzed {len(values):,} {analysis_unit}s using a '
+                'histogram-only major-axis-length distribution.'
+            )
+            print(f'- {support_messages[0]}')
+
+            return {
+                'source': source_name,
+                'analysis_unit': analysis_unit,
+                'observation_count': len(values),
+                'pixel_scale_factor': pixel_scale_factor,
+                'scale_units': scale_units,
+                'selected_component_count': None,
+                'bic_scores': {},
+                'classification_supported': False,
+                'longer_chains_supported': False,
+                'support_messages': support_messages,
+                'support_diagnostics': {},
+                'warnings': analysis_warnings,
+                'component_summary': pd.DataFrame(),
+                'classification_ranges': pd.DataFrame(),
+                'classified_dataframe': analysis_dataframe,
+                'component_column': component_column,
+                'class_column': class_column,
+                'figure': figure,
+            }
+
         unique_value_count = len(np.unique(values))
         maximum_fittable_components = min(
             max_components,
@@ -1082,14 +1180,17 @@ class Identify:
             max(1, len(values) // 10)
         )
 
-        if len(values) < 20:
-            raise ValueError(
-                'At least 20 valid major-axis-length observations are required.'
-            )
         if component_count is not None and component_count > maximum_fittable_components:
             raise ValueError(
                 'component_count is too large for the number of available observations.'
             )
+
+        try:
+            from sklearn.mixture import GaussianMixture  # type: ignore
+        except ImportError as error:
+            raise ImportError(
+                'scikit-learn is required to analyze major-axis-length distributions.'
+            ) from error
 
         fit_values = values.reshape(-1, 1)
         fitted_models = {}
@@ -1152,13 +1253,7 @@ class Identify:
 
         component_assignments = np.searchsorted(
             component_boundaries, values, side='right')
-        component_column = f'{length_column}_component'
-        class_column = f'{length_column}_class'
         analysis_dataframe[component_column] = component_assignments
-
-        pixel_scale_factor = float(self._parent.get_pixel_scale_factor())
-        has_valid_scale = np.isfinite(pixel_scale_factor) and pixel_scale_factor > 0
-        scale_units = self._parent.get_scale_units() or 'scale_units'
 
         component_rows = []
         for component_index in range(selected_component_count):

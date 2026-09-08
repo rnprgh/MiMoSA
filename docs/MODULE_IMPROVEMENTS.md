@@ -19,6 +19,9 @@ upstream RABiTPy workflow. It is not an exhaustive API reference.
 - Supports saved-mask import and export in addition to thresholding and
   Omnipose segmentation.
 - Adds Gaussian centroid refinement with parameter visualization.
+- Returns an explicitly labeled histogram-only major-axis-length analysis for
+  1–19 valid observations instead of attempting unsupported mixture
+  classification.
 - Preserves full and filtered region-property tables separately.
 - Exports region data and filter settings in reusable formats.
 
@@ -50,6 +53,10 @@ upstream RABiTPy workflow. It is not an exhaustive API reference.
   difference and excludes larger gaps from observed motion.
 - Records calibration, smoothing, trimming, state, count, and censoring
   provenance so blank or aggregated results can be audited.
+- Distinguishes point-mean, per-particle time-weighted, support-weighted pooled,
+  and equal-particle velocity metrics through explicit canonical names.
+- Adds whole-particle bootstrap confidence intervals for pooled run/tumble
+  speeds and records row-specific sample units through `n` and `n_definition`.
 - Centralizes plot styling and exports analysis tables for reuse.
 
 ## ComparativeStats
@@ -58,6 +65,10 @@ upstream RABiTPy workflow. It is not an exhaustive API reference.
 - Preserves dataset, strain, and particle provenance during pooling.
 - Validates units, calibration, parameter ranges, companion identity coverage,
   and compatible schemas before comparison.
+- Normalizes documented legacy velocity names in memory while rejecting files
+  that contain ambiguous legacy-and-canonical duplicates.
+- Reports both equal-particle and classified-duration-weighted tumble-time
+  fractions, with explicit sample-count and uncertainty definitions.
 - Produces machine-readable validation reports and cross-run comparison tables
   and figures for turns, run/tumble behavior, speeds, and MSD.
 

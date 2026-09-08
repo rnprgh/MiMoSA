@@ -110,6 +110,63 @@ class ComparativeStats:
         ),
     }
 
+    LEGACY_VELOCITY_COLUMN_ALIASES = {
+        'velocity_tumble_summary': {
+            'mean_run_speed': 'point_mean_run_speed',
+            'std_run_speed': 'point_std_run_speed',
+            'mean_tumble_speed': 'point_mean_tumble_speed',
+            'std_tumble_speed': 'point_std_tumble_speed',
+            'v_R': 'time_weighted_vR',
+            'v_R_sample_count': 'vR_interval_count',
+            'v_R_support_seconds': 'vR_support_seconds',
+            'v_T': 'time_weighted_vT',
+            'v_T_sample_count': 'vT_interval_count',
+            'v_T_support_seconds': 'vT_support_seconds',
+        },
+        'velocity_tumble_population': {
+            'mean_run_speed': 'particle_mean_point_run_speed',
+            'std_run_speed_between_particles': (
+                'particle_std_point_run_speed'
+            ),
+            'mean_tumble_speed': 'particle_mean_point_tumble_speed',
+            'std_tumble_speed_between_particles': (
+                'particle_std_point_tumble_speed'
+            ),
+            'v_R': 'pooled_time_weighted_vR',
+            'v_R_ci_lower': 'pooled_time_weighted_vR_ci_lower',
+            'v_R_ci_upper': 'pooled_time_weighted_vR_ci_upper',
+            'v_R_sample_count': 'vR_interval_count',
+            'v_R_support_seconds': 'vR_support_seconds',
+            'v_R_particle_count': 'vR_particle_count',
+            'v_T': 'pooled_time_weighted_vT',
+            'v_T_ci_lower': 'pooled_time_weighted_vT_ci_lower',
+            'v_T_ci_upper': 'pooled_time_weighted_vT_ci_upper',
+            'v_T_sample_count': 'vT_interval_count',
+            'v_T_support_seconds': 'vT_support_seconds',
+            'v_T_particle_count': 'vT_particle_count',
+            'mean_particle_v_R': 'particle_mean_time_weighted_vR',
+            'std_particle_v_R': 'particle_std_time_weighted_vR',
+            'sem_particle_v_R': 'particle_sem_time_weighted_vR',
+            'mean_particle_v_T': 'particle_mean_time_weighted_vT',
+            'std_particle_v_T': 'particle_std_time_weighted_vT',
+            'sem_particle_v_T': 'particle_sem_time_weighted_vT',
+        },
+    }
+    LEGACY_VELOCITY_TABLE_1_PARAMETER_ALIASES = {
+        'vR': 'pooled_time_weighted_vR',
+        'v_R_ci_lower': 'pooled_time_weighted_vR_ci_lower',
+        'v_R_ci_upper': 'pooled_time_weighted_vR_ci_upper',
+        'mean_particle_v_R': 'particle_mean_time_weighted_vR',
+        'std_particle_v_R': 'particle_std_time_weighted_vR',
+        'sem_particle_v_R': 'particle_sem_time_weighted_vR',
+        'vT': 'pooled_time_weighted_vT',
+        'v_T_ci_lower': 'pooled_time_weighted_vT_ci_lower',
+        'v_T_ci_upper': 'pooled_time_weighted_vT_ci_upper',
+        'mean_particle_v_T': 'particle_mean_time_weighted_vT',
+        'std_particle_v_T': 'particle_std_time_weighted_vT',
+        'sem_particle_v_T': 'particle_sem_time_weighted_vT',
+    }
+
     REQUIRED_COLUMNS = {
         'fitted_mean_speeds': {'mean_speed'},
         'particle_characteristics': {
@@ -141,10 +198,10 @@ class ComparativeStats:
         'angle_tumble_population': {'particle_count'},
         'angle_tumble_table_1': {'Parameter', 'Value'},
         'velocity_tumble_summary': {
-            'particle', 'v_R', 'v_R_support_seconds', 'v_T',
-            'v_T_support_seconds', 't_R', 't_R_interval_count', 't_T',
-            't_T_interval_count', 'p', 'p_direction_change_count', 'R',
-            'R_run_transition_count',
+            'particle', 'time_weighted_vR', 'vR_support_seconds',
+            'time_weighted_vT', 'vT_support_seconds', 't_R',
+            't_R_interval_count', 't_T', 't_T_interval_count', 'p',
+            'p_direction_change_count', 'R', 'R_run_transition_count',
         },
         'velocity_tumble_events': {
             'particle', 'segment_id', 'run_to_run_turn_angle_degrees',
@@ -158,8 +215,9 @@ class ComparativeStats:
             'angular_velocity_magnitude_radians_per_second',
         },
         'velocity_tumble_population': {
-            'particle_count', 'v_R', 'v_R_support_seconds', 'v_T',
-            'v_T_support_seconds', 't_R', 't_R_interval_count', 't_T',
+            'particle_count', 'pooled_time_weighted_vR',
+            'vR_support_seconds', 'pooled_time_weighted_vT',
+            'vT_support_seconds', 't_R', 't_R_interval_count', 't_T',
             't_T_interval_count', 'p', 'p_direction_change_count', 'R',
             'R_run_transition_count',
         },
@@ -334,6 +392,9 @@ class ComparativeStats:
         mismatched_strain_metadata: list[tuple[str, str, Path]] = []
         for dataframe_name, path in paths.items():
             dataframe = pd.read_csv(path)
+            dataframe = self.__canonicalize_velocity_names(
+                dataframe_name, dataframe, path
+            )
             self.__validate_required_columns(
                 dataframe_name, dataframe, path
             )
@@ -671,44 +732,229 @@ class ComparativeStats:
     def velocity_tumble_analysis_comparison(
         self,
         export_csv_path: str | os.PathLike | None = None,
+        bootstrap_resamples: int = 10_000,
+        bootstrap_confidence_level: float = 0.95,
+        bootstrap_random_seed: int | None = 0,
     ) -> pd.DataFrame:
         """
-        Rebuild a support-weighted Najafi-style Table 1 per strain.
+        Rebuild the complete support-weighted Najafi-style Table 1 per strain.
 
         Run/tumble speeds use support seconds; p and R use their exported pair
         counts. Run and tumble durations use exported complete-episode counts.
-        Exact pooled tR SD/SEM requires the current ``std_t_R`` export.
+        The mean-particle tumble-time fraction gives each particle equal
+        weight, whereas the pooled fraction is total tumble time divided by
+        total classified tracking time. Its SD is the classified-time-weighted
+        sample SD across particle fractions. Exact pooled SDs for the other
+        parameters require current per-particle ``std_t_R``, ``std_t_T``,
+        ``std_p``, and ``std_R`` exports. Pooled speed confidence intervals
+        resample whole contributing particles. Dr and its fit diagnostics are
+        summarized from dataset-level Table 1 files because this method does
+        not perform a new combined-strain angular-MSD fit.
         """
+        if isinstance(bootstrap_resamples, bool) or not isinstance(
+            bootstrap_resamples, (int, np.integer)
+        ):
+            raise TypeError('bootstrap_resamples must be an integer.')
+        bootstrap_resamples = int(bootstrap_resamples)
+        if bootstrap_resamples < 2:
+            raise ValueError('bootstrap_resamples must be at least 2.')
+        if isinstance(bootstrap_confidence_level, bool) or not isinstance(
+            bootstrap_confidence_level,
+            (int, float, np.integer, np.floating),
+        ):
+            raise TypeError(
+                'bootstrap_confidence_level must be a finite number.'
+            )
+        bootstrap_confidence_level = float(bootstrap_confidence_level)
+        if (
+            not np.isfinite(bootstrap_confidence_level) or
+            not 0 < bootstrap_confidence_level < 1
+        ):
+            raise ValueError(
+                'bootstrap_confidence_level must be strictly between 0 and 1.'
+            )
+        if bootstrap_random_seed is not None:
+            if isinstance(bootstrap_random_seed, bool) or not isinstance(
+                bootstrap_random_seed, (int, np.integer)
+            ):
+                raise TypeError(
+                    'bootstrap_random_seed must be a nonnegative integer or '
+                    'None.'
+                )
+            bootstrap_random_seed = int(bootstrap_random_seed)
+            if bootstrap_random_seed < 0:
+                raise ValueError(
+                    'bootstrap_random_seed must be a nonnegative integer or '
+                    'None.'
+                )
+
         self.__prepare_comparison('velocity')
         summary = self.get_combined_dataframe('velocity_tumble_summary')
+        table_1 = self.__optional_combined_dataframe(
+            'velocity_tumble_table_1'
+        )
         self.__require_compatible_units(
             summary, ('distance_unit', 'speed_unit', 'angular_velocity_unit'),
             'velocity-based tumble comparison'
         )
+        missing_table_1 = [
+            record.dataset_id for record in self._datasets
+            if 'velocity_tumble_table_1' not in record.dataframes
+        ]
+        if missing_table_1:
+            warnings.warn(
+                'Dr parameters cannot include datasets without Velocity Tumble '
+                'Table 1 exports: ' + ', '.join(missing_table_1) + '.',
+                UserWarning,
+                stacklevel=2,
+            )
+
+        strain_groups = list(summary.groupby('strain', sort=False))
+        bootstrap_seed_sequence = np.random.SeedSequence(
+            bootstrap_random_seed
+        )
+        bootstrap_seeds = iter(bootstrap_seed_sequence.spawn(
+            2 * len(strain_groups)
+        ))
         rows: list[dict] = []
-        for strain, strain_summary in summary.groupby('strain', sort=False):
+        for strain, strain_summary in strain_groups:
             dataset_count = int(strain_summary['dataset_id'].nunique())
             speed_unit = self.__single_unit(
                 strain_summary, 'speed_unit', 'speed'
             )
             v_r, _ = self.__weighted_mean_from_columns(
-                strain_summary, 'v_R', 'v_R_support_seconds'
+                strain_summary, 'time_weighted_vR', 'vR_support_seconds'
             )
             v_t, _ = self.__weighted_mean_from_columns(
-                strain_summary, 'v_T', 'v_T_support_seconds'
+                strain_summary, 'time_weighted_vT', 'vT_support_seconds'
             )
-            if 'v_R_sample_count' in strain_summary.columns:
+            if 'vR_interval_count' in strain_summary.columns:
                 v_r_count = int(self.__numeric_series(
-                    strain_summary['v_R_sample_count']
+                    strain_summary['vR_interval_count']
                 ).fillna(0).sum())
             else:
                 v_r_count = np.nan
-            if 'v_T_sample_count' in strain_summary.columns:
+            if 'vT_interval_count' in strain_summary.columns:
                 v_t_count = int(self.__numeric_series(
-                    strain_summary['v_T_sample_count']
+                    strain_summary['vT_interval_count']
                 ).fillna(0).sum())
             else:
                 v_t_count = np.nan
+
+            v_r_values = self.__numeric_series(
+                strain_summary['time_weighted_vR']
+            ).to_numpy(dtype=float)
+            v_r_weights = self.__numeric_series(
+                strain_summary['vR_support_seconds']
+            ).to_numpy(dtype=float)
+            v_t_values = self.__numeric_series(
+                strain_summary['time_weighted_vT']
+            ).to_numpy(dtype=float)
+            v_t_weights = self.__numeric_series(
+                strain_summary['vT_support_seconds']
+            ).to_numpy(dtype=float)
+            valid_v_r_particles = (
+                np.isfinite(v_r_values) & np.isfinite(v_r_weights) &
+                (v_r_weights > 0)
+            )
+            valid_v_t_particles = (
+                np.isfinite(v_t_values) & np.isfinite(v_t_weights) &
+                (v_t_weights > 0)
+            )
+            v_r_particle_count = int(np.sum(valid_v_r_particles))
+            v_t_particle_count = int(np.sum(valid_v_t_particles))
+            v_r_ci_lower, v_r_ci_upper = (
+                self.__particle_cluster_bootstrap_weighted_mean_ci(
+                    v_r_values,
+                    v_r_weights,
+                    bootstrap_resamples,
+                    bootstrap_confidence_level,
+                    np.random.default_rng(next(bootstrap_seeds)),
+                )
+            )
+            v_t_ci_lower, v_t_ci_upper = (
+                self.__particle_cluster_bootstrap_weighted_mean_ci(
+                    v_t_values,
+                    v_t_weights,
+                    bootstrap_resamples,
+                    bootstrap_confidence_level,
+                    np.random.default_rng(next(bootstrap_seeds)),
+                )
+            )
+            particle_v_r_values = v_r_values[np.isfinite(v_r_values)]
+            particle_v_t_values = v_t_values[np.isfinite(v_t_values)]
+            mean_particle_v_r = self.__safe_mean(particle_v_r_values)
+            std_particle_v_r = self.__safe_std(particle_v_r_values)
+            sem_particle_v_r = self.__safe_sem(particle_v_r_values)
+            mean_particle_v_t = self.__safe_mean(particle_v_t_values)
+            std_particle_v_t = self.__safe_std(particle_v_t_values)
+            sem_particle_v_t = self.__safe_sem(particle_v_t_values)
+
+            tumble_fractions = np.full(len(strain_summary), np.nan, dtype=float)
+            if 'tumble_time_fraction' in strain_summary.columns:
+                tumble_fractions = self.__numeric_series(
+                    strain_summary['tumble_time_fraction']
+                ).to_numpy(dtype=float)
+            classified_seconds = np.full(
+                len(strain_summary), np.nan, dtype=float
+            )
+            if 'classified_tracking_time_seconds' in strain_summary.columns:
+                classified_seconds = self.__numeric_series(
+                    strain_summary['classified_tracking_time_seconds']
+                ).to_numpy(dtype=float)
+            tumble_seconds = np.full(len(strain_summary), np.nan, dtype=float)
+            if 'total_tumble_interval_seconds' in strain_summary.columns:
+                tumble_seconds = self.__numeric_series(
+                    strain_summary['total_tumble_interval_seconds']
+                ).to_numpy(dtype=float)
+
+            derivable_fractions = (
+                ~np.isfinite(tumble_fractions) & np.isfinite(tumble_seconds) &
+                np.isfinite(classified_seconds) & (classified_seconds > 0)
+            )
+            tumble_fractions[derivable_fractions] = (
+                tumble_seconds[derivable_fractions] /
+                classified_seconds[derivable_fractions]
+            )
+            derivable_tumble_seconds = (
+                ~np.isfinite(tumble_seconds) & np.isfinite(tumble_fractions) &
+                np.isfinite(classified_seconds) & (classified_seconds > 0)
+            )
+            tumble_seconds[derivable_tumble_seconds] = (
+                tumble_fractions[derivable_tumble_seconds] *
+                classified_seconds[derivable_tumble_seconds]
+            )
+
+            particle_tumble_fraction_values = tumble_fractions[
+                np.isfinite(tumble_fractions)
+            ]
+            mean_particle_tumble_time_fraction = self.__safe_mean(
+                particle_tumble_fraction_values
+            )
+            std_particle_tumble_time_fraction = self.__safe_std(
+                particle_tumble_fraction_values
+            )
+            valid_pooled_tumble_fraction = (
+                np.isfinite(tumble_fractions) &
+                np.isfinite(tumble_seconds) &
+                np.isfinite(classified_seconds) &
+                (classified_seconds > 0)
+            )
+            pooled_tumble_fraction_particle_count = int(
+                np.sum(valid_pooled_tumble_fraction)
+            )
+            if valid_pooled_tumble_fraction.any():
+                pooled_tumble_time_fraction = float(
+                    np.sum(tumble_seconds[valid_pooled_tumble_fraction]) /
+                    np.sum(classified_seconds[valid_pooled_tumble_fraction])
+                )
+            else:
+                pooled_tumble_time_fraction = np.nan
+            std_pooled_tumble_time_fraction = self.__weighted_sample_std(
+                tumble_fractions[valid_pooled_tumble_fraction],
+                classified_seconds[valid_pooled_tumble_fraction],
+            )
+
             t_r, t_r_count = self.__weighted_mean_from_columns(
                 strain_summary, 't_R', 't_R_interval_count'
             )
@@ -718,56 +964,386 @@ class ComparativeStats:
             t_t, t_t_count = self.__weighted_mean_from_columns(
                 strain_summary, 't_T', 't_T_interval_count'
             )
+            std_t_t, _ = self.__combine_group_standard_deviation(
+                strain_summary, 't_T', 'std_t_T', 't_T_interval_count'
+            )
             persistence, persistence_count = (
                 self.__weighted_mean_from_columns(
                     strain_summary, 'p', 'p_direction_change_count'
                 )
+            )
+            std_persistence, _ = self.__combine_group_standard_deviation(
+                strain_summary, 'p', 'std_p', 'p_direction_change_count'
             )
             run_persistence, run_persistence_count = (
                 self.__weighted_mean_from_columns(
                     strain_summary, 'R', 'R_run_transition_count'
                 )
             )
+            std_run_persistence, _ = (
+                self.__combine_group_standard_deviation(
+                    strain_summary, 'R', 'std_R',
+                    'R_run_transition_count'
+                )
+            )
 
-            self.__append_table_value(
-                rows, strain, 'Strain', strain,
-                int(strain_summary['cell_id'].nunique()), dataset_count
+            def dataset_table_mean(parameter: str) -> tuple[float, int]:
+                values = self.__velocity_table_1_parameter_values(
+                    table_1, strain, parameter
+                )
+                return self.__safe_mean(values), int(len(values))
+
+            dr_value, dr_count = dataset_table_mean(
+                self.ANGULAR_MSD_DR_PARAMETER
             )
-            self.__append_table_value(
-                rows, strain, f'vR ({speed_unit})', v_r,
-                v_r_count, dataset_count
+            dr_fit_max_lag, dr_fit_max_lag_count = dataset_table_mean(
+                'Dr fit max lag (s)'
             )
-            self.__append_table_value(
-                rows, strain, f'vT ({speed_unit})', v_t,
-                v_t_count, dataset_count
+            (
+                dr_largest_fitted_lag,
+                dr_largest_fitted_lag_count,
+            ) = dataset_table_mean('Dr largest fitted lag (s)')
+            dr_fit_r_squared, dr_fit_r_squared_count = dataset_table_mean(
+                'Dr fit uncentered R^2'
             )
-            self.__append_table_value(
-                rows, strain, 'Mean tR (s)', t_r,
-                t_r_count, dataset_count
+            dr_fit_lag_counts = self.__velocity_table_1_parameter_values(
+                table_1, strain, 'Dr fit lag count'
             )
-            self.__append_table_value(
-                rows, strain, '±std', std_t_r,
-                t_r_count, dataset_count
+            dr_fit_pair_counts = self.__velocity_table_1_parameter_values(
+                table_1, strain, 'Dr fit direction-pair count'
             )
-            self.__append_table_value(
-                rows, strain, '±sem', sem_t_r,
-                t_r_count, dataset_count
+            if table_1.empty or 'strain' not in table_1.columns:
+                strain_table = pd.DataFrame()
+            else:
+                strain_table = table_1.loc[table_1['strain'] == strain]
+            status_rows = (
+                strain_table.loc[
+                    strain_table['Parameter'].astype(str).str.strip() ==
+                    'Dr fit status'
+                ]
+                if not strain_table.empty else pd.DataFrame()
             )
-            self.__append_table_value(
-                rows, strain, 'Mean tT (s)', t_t,
-                t_t_count, dataset_count
+            if status_rows.empty:
+                dr_fit_status = 'not available: Table 1 not loaded'
+                dr_fit_status_count = 0
+            else:
+                duplicate_status_datasets = status_rows.loc[
+                    status_rows.duplicated('dataset_id', keep=False),
+                    'dataset_id'
+                ].astype(str).unique()
+                if len(duplicate_status_datasets):
+                    raise ValueError(
+                        'Velocity Tumble Table 1 contains duplicate Dr fit '
+                        'status rows for datasets: ' +
+                        ', '.join(duplicate_status_datasets) + '.'
+                    )
+                statuses = sorted({
+                    str(value).strip() for value in status_rows['Value']
+                    if str(value).strip()
+                })
+                dr_fit_status_count = int(len(status_rows))
+                if not statuses:
+                    dr_fit_status = 'not exported'
+                elif len(statuses) == 1:
+                    dr_fit_status = statuses[0]
+                else:
+                    dr_fit_status = 'mixed: ' + ', '.join(statuses)
+
+            def append(
+                parameter: str,
+                value: object,
+                sample_count: int | float,
+                n_definition: str,
+            ) -> None:
+                self.__append_table_value(
+                    rows,
+                    strain,
+                    parameter,
+                    value,
+                    sample_count,
+                    dataset_count,
+                    n_definition,
+                )
+
+            append(
+                'Strain', strain, int(strain_summary['cell_id'].nunique()),
+                'unique composite particle identities across loaded datasets'
             )
-            self.__append_table_value(
-                rows, strain, 'p', persistence,
-                persistence_count, dataset_count
+            particle_tumble_fraction_definition = (
+                'particles with a finite particle tumble_time_fraction; each '
+                'particle contributes one equal-weight value'
             )
-            self.__append_table_value(
-                rows, strain, 'R', run_persistence,
-                run_persistence_count, dataset_count
+            append(
+                'mean_particle_tumble_time_fraction',
+                mean_particle_tumble_time_fraction,
+                len(particle_tumble_fraction_values),
+                particle_tumble_fraction_definition,
+            )
+            append(
+                'std_particle_tumble_time_fraction',
+                std_particle_tumble_time_fraction,
+                len(particle_tumble_fraction_values),
+                self.__sample_sd_n_definition(
+                    particle_tumble_fraction_definition,
+                    len(particle_tumble_fraction_values),
+                    std_particle_tumble_time_fraction,
+                ),
+            )
+            pooled_tumble_fraction_definition = (
+                'particles with a finite tumble-time fraction and positive '
+                'classified tracking time; Value is sum of particle tumble '
+                'seconds divided by sum of particle classified seconds'
+            )
+            append(
+                'pooled_tumble_time_fraction',
+                pooled_tumble_time_fraction,
+                pooled_tumble_fraction_particle_count,
+                pooled_tumble_fraction_definition,
+            )
+            if pooled_tumble_fraction_particle_count < 2:
+                pooled_tumble_fraction_sd_definition = (
+                    pooled_tumble_fraction_definition +
+                    '; duration-weighted sample SD not calculated because n='
+                    f'{pooled_tumble_fraction_particle_count}, but at least 2 '
+                    'particles are required'
+                )
+            elif not np.isfinite(std_pooled_tumble_time_fraction):
+                pooled_tumble_fraction_sd_definition = (
+                    pooled_tumble_fraction_definition +
+                    '; duration-weighted sample SD could not be calculated '
+                    'because its effective weighted denominator is not positive'
+                )
+            else:
+                pooled_tumble_fraction_sd_definition = (
+                    pooled_tumble_fraction_definition +
+                    '; duration-weighted between-particle sample SD uses '
+                    'classified_tracking_time_seconds as weights'
+                )
+            append(
+                'std_pooled_tumble_time_fraction',
+                std_pooled_tumble_time_fraction,
+                pooled_tumble_fraction_particle_count,
+                pooled_tumble_fraction_sd_definition,
+            )
+            append(
+                f'pooled_time_weighted_vR ({speed_unit})', v_r, v_r_count,
+                'finite run-state speed intervals; pooled mean is weighted by '
+                'their elapsed-time support'
+            )
+            run_ci_definition = (
+                'particles with finite time_weighted_vR and positive run '
+                'support; whole particles are resampled as bootstrap clusters'
+            )
+            append(
+                f'pooled_time_weighted_vR_ci_lower ({speed_unit})',
+                v_r_ci_lower,
+                v_r_particle_count, run_ci_definition
+            )
+            append(
+                f'pooled_time_weighted_vR_ci_upper ({speed_unit})',
+                v_r_ci_upper,
+                v_r_particle_count, run_ci_definition
+            )
+            run_particle_definition = (
+                'particles with finite time_weighted_vR; each particle '
+                'contributes one equal-weight value'
+            )
+            append(
+                f'particle_mean_time_weighted_vR ({speed_unit})',
+                mean_particle_v_r,
+                len(particle_v_r_values), run_particle_definition
+            )
+            append(
+                f'particle_std_time_weighted_vR ({speed_unit})',
+                std_particle_v_r,
+                len(particle_v_r_values), self.__sample_sd_n_definition(
+                    run_particle_definition,
+                    len(particle_v_r_values),
+                    std_particle_v_r,
+                )
+            )
+            append(
+                f'particle_sem_time_weighted_vR ({speed_unit})',
+                sem_particle_v_r,
+                len(particle_v_r_values), self.__sem_n_definition(
+                    run_particle_definition,
+                    len(particle_v_r_values),
+                    sem_particle_v_r,
+                )
+            )
+            append(
+                f'pooled_time_weighted_vT ({speed_unit})', v_t, v_t_count,
+                'finite tumble-state speed intervals; pooled mean is weighted '
+                'by their elapsed-time support'
+            )
+            tumble_ci_definition = (
+                'particles with finite time_weighted_vT and positive tumble '
+                'support; whole particles are resampled as bootstrap clusters'
+            )
+            append(
+                f'pooled_time_weighted_vT_ci_lower ({speed_unit})',
+                v_t_ci_lower,
+                v_t_particle_count, tumble_ci_definition
+            )
+            append(
+                f'pooled_time_weighted_vT_ci_upper ({speed_unit})',
+                v_t_ci_upper,
+                v_t_particle_count, tumble_ci_definition
+            )
+            tumble_particle_definition = (
+                'particles with finite time_weighted_vT; each particle '
+                'contributes one equal-weight value'
+            )
+            append(
+                f'particle_mean_time_weighted_vT ({speed_unit})',
+                mean_particle_v_t,
+                len(particle_v_t_values), tumble_particle_definition
+            )
+            append(
+                f'particle_std_time_weighted_vT ({speed_unit})',
+                std_particle_v_t,
+                len(particle_v_t_values), self.__sample_sd_n_definition(
+                    tumble_particle_definition,
+                    len(particle_v_t_values),
+                    std_particle_v_t,
+                )
+            )
+            append(
+                f'particle_sem_time_weighted_vT ({speed_unit})',
+                sem_particle_v_t,
+                len(particle_v_t_values), self.__sem_n_definition(
+                    tumble_particle_definition,
+                    len(particle_v_t_values),
+                    sem_particle_v_t,
+                )
+            )
+            for parameter, value in (
+                ('pooled_speed_bootstrap_resamples', bootstrap_resamples),
+                (
+                    'pooled_speed_bootstrap_confidence_level',
+                    bootstrap_confidence_level,
+                ),
+                (
+                    'pooled_speed_bootstrap_random_seed',
+                    bootstrap_random_seed,
+                ),
+            ):
+                append(
+                    parameter, value, np.nan,
+                    'not applicable; this row is a bootstrap configuration '
+                    'value for the combined-strain calculation'
+                )
+
+            run_interval_definition = 'complete uncensored run episodes'
+            append('Mean tR (s)', t_r, t_r_count, run_interval_definition)
+            append(
+                '±std', std_t_r, t_r_count,
+                self.__sample_sd_n_definition(
+                    run_interval_definition, t_r_count, std_t_r
+                )
+            )
+            append(
+                '±sem', sem_t_r, t_r_count,
+                self.__sem_n_definition(
+                    run_interval_definition, t_r_count, sem_t_r
+                )
+            )
+            tumble_interval_definition = 'complete uncensored tumble episodes'
+            append(
+                'Mean tT (s)', t_t, t_t_count, tumble_interval_definition
+            )
+            append(
+                'std_t_T (s)', std_t_t, t_t_count,
+                self.__sample_sd_n_definition(
+                    tumble_interval_definition, t_t_count, std_t_t
+                )
+            )
+            persistence_definition = (
+                'supported within-run direction-change cosine observations'
+            )
+            append('p', persistence, persistence_count, persistence_definition)
+            append(
+                'std_p', std_persistence, persistence_count,
+                self.__sample_sd_n_definition(
+                    persistence_definition,
+                    persistence_count,
+                    std_persistence,
+                )
+            )
+            transition_definition = (
+                'supported fitted run-to-run transition cosine observations'
+            )
+            append(
+                'R', run_persistence, run_persistence_count,
+                transition_definition
+            )
+            append(
+                'std_R', std_run_persistence, run_persistence_count,
+                self.__sample_sd_n_definition(
+                    transition_definition,
+                    run_persistence_count,
+                    std_run_persistence,
+                )
+            )
+
+            table_1_mean_definition = (
+                'finite independent dataset-level Table 1 values; Value is '
+                'their equal-dataset mean because no combined angular-MSD '
+                'refit is performed'
+            )
+            append(
+                self.ANGULAR_MSD_DR_PARAMETER,
+                dr_value,
+                dr_count,
+                table_1_mean_definition,
+            )
+            append(
+                'Dr fit max lag (s)',
+                dr_fit_max_lag,
+                dr_fit_max_lag_count,
+                table_1_mean_definition,
+            )
+            append(
+                'Dr largest fitted lag (s)',
+                dr_largest_fitted_lag,
+                dr_largest_fitted_lag_count,
+                table_1_mean_definition,
+            )
+            append(
+                'Dr fit lag count',
+                int(np.sum(dr_fit_lag_counts))
+                if len(dr_fit_lag_counts) else np.nan,
+                len(dr_fit_lag_counts),
+                'finite independent dataset-level Table 1 fit-lag counts; '
+                'Value is their sum because no combined angular-MSD refit is '
+                'performed',
+            )
+            append(
+                'Dr fit direction-pair count',
+                int(np.sum(dr_fit_pair_counts))
+                if len(dr_fit_pair_counts) else np.nan,
+                len(dr_fit_pair_counts),
+                'finite independent dataset-level Table 1 direction-pair '
+                'counts; Value is their sum because no combined angular-MSD '
+                'refit is performed',
+            )
+            append(
+                'Dr fit uncentered R^2',
+                dr_fit_r_squared,
+                dr_fit_r_squared_count,
+                table_1_mean_definition,
+            )
+            append(
+                'Dr fit status',
+                dr_fit_status,
+                dr_fit_status_count,
+                'dataset-level Table 1 fit-status rows; Value is the shared '
+                'status or a mixed-status summary',
             )
 
         comparison = pd.DataFrame(rows, columns=[
-            'strain', 'Parameter', 'Value', 'sample_count', 'dataset_count'
+            'strain', 'Parameter', 'Value', 'sample_count', 'dataset_count',
+            'n_definition',
         ])
         self._velocity_comparison_dataframe = comparison
         if export_csv_path is not None:
@@ -1036,6 +1612,7 @@ class ComparativeStats:
         show: bool = True,
         *,
         show_histogram: bool | None = None,
+        show_label: bool = True,
         title: str | None = None,
         title_fontsize: float | None = None,
         x_axis_fontsize: float | None = None,
@@ -1058,7 +1635,7 @@ class ComparativeStats:
         corresponding strain fit and strain mean repeated for direct reuse.
         ``show_histogram=False`` hides the observed step histograms while
         retaining the fitted curves. ``bins=None`` keeps the established
-        25-bin default.
+        25-bin default. ``show_label=False`` hides the plot legend.
         """
         plotting_parameters = self.__resolve_analysis_plotting_parameters(
             title=title,
@@ -1082,6 +1659,8 @@ class ComparativeStats:
         show_histogram = True if show_histogram is None else show_histogram
         if not isinstance(show_histogram, bool):
             raise TypeError('show_histogram must be a boolean or None.')
+        if not isinstance(show_label, bool):
+            raise TypeError('show_label must be a boolean.')
         if colors is not None and strain_colors is not None:
             raise ValueError(
                 'Pass either legacy colors or strain_colors, not both.'
@@ -1216,7 +1795,8 @@ class ComparativeStats:
         ax.set_ylabel('Probability density')
         ax.set_title('Fitted mean-speed distributions by strain')
         ax.grid(alpha=0.2)
-        ax.legend()
+        if show_label:
+            ax.legend()
         self.__apply_axis_title_settings(
             plotting_parameters,
             'fitted_mean_speed_distribution_comparison',
@@ -1593,8 +2173,8 @@ class ComparativeStats:
                 dataset_summary['strain'] == strain
             ]
             for metric, marker, offset, label in (
-                ('v_R', 'o', -0.13, 'Run'),
-                ('v_T', 'D', 0.13, 'Tumble'),
+                ('pooled_time_weighted_vR', 'o', -0.13, 'Run'),
+                ('pooled_time_weighted_vT', 'D', 0.13, 'Tumble'),
             ):
                 values = self.__finite_values(strain_datasets[metric])
                 if len(values):
@@ -1686,8 +2266,8 @@ class ComparativeStats:
                 run_speeds, bins=speed_edges, density=True
             )
             centers = (edges[:-1] + edges[1:]) / 2
-            mean_run_speed = self.__safe_mean(run_speeds)
-            mean_label = f'{mean_run_speed:.3g} {speed_unit}'
+            point_mean_run_speed = self.__safe_mean(run_speeds)
+            mean_label = f'{point_mean_run_speed:.3g} {speed_unit}'
             legend_label = (
                 f'{strain}\n'
                 f'n={cell_count}, mean={mean_label}'
@@ -1766,7 +2346,7 @@ class ComparativeStats:
                 'probability_density': probability,
                 'point_count': len(run_speeds),
                 'particle_count': cell_count,
-                'mean_run_speed': mean_run_speed,
+                'point_mean_run_speed': point_mean_run_speed,
                 'speed_unit': speed_unit,
                 'curve_method': panel_b_curve_method,
                 'histogram_mode': panel_b_histogram_mode,
@@ -2594,6 +3174,54 @@ class ComparativeStats:
                 f"{path} is missing required columns for '{dataframe_name}': "
                 f'{missing}'
             )
+
+    def __canonicalize_velocity_names(
+        self,
+        dataframe_name: str,
+        dataframe: pd.DataFrame,
+        path: Path,
+    ) -> pd.DataFrame:
+        """Normalize legacy velocity-analysis names while loading CSVs."""
+        output = dataframe.copy()
+        column_aliases = self.LEGACY_VELOCITY_COLUMN_ALIASES.get(
+            dataframe_name, {}
+        )
+        rename_columns = {}
+        for legacy_name, canonical_name in column_aliases.items():
+            if legacy_name not in output.columns:
+                continue
+            if canonical_name in output.columns:
+                raise ValueError(
+                    f'{path} contains both legacy column '
+                    f"'{legacy_name}' and canonical column "
+                    f"'{canonical_name}'. Remove one unambiguous copy."
+                )
+            rename_columns[legacy_name] = canonical_name
+        if rename_columns:
+            output = output.rename(columns=rename_columns)
+
+        if (
+            dataframe_name == 'velocity_tumble_table_1' and
+            'Parameter' in output.columns
+        ):
+            aliases = self.LEGACY_VELOCITY_TABLE_1_PARAMETER_ALIASES
+
+            def canonical_parameter_name(value: object) -> object:
+                if pd.isna(value):
+                    return value
+                parameter = str(value)
+                for legacy_name, canonical_name in aliases.items():
+                    if parameter == legacy_name:
+                        return canonical_name
+                    unit_prefix = f'{legacy_name} ('
+                    if parameter.startswith(unit_prefix):
+                        return canonical_name + parameter[len(legacy_name):]
+                return value
+
+            output['Parameter'] = output['Parameter'].map(
+                canonical_parameter_name
+            )
+        return output
 
     @staticmethod
     def __clean_strain_values(values: pd.Series) -> set[str]:
@@ -3606,6 +4234,7 @@ class ComparativeStats:
         value: object,
         sample_count: int | float,
         dataset_count: int,
+        n_definition: str = '',
     ) -> None:
         rows.append({
             'strain': strain,
@@ -3613,6 +4242,7 @@ class ComparativeStats:
             'Value': value,
             'sample_count': sample_count,
             'dataset_count': dataset_count,
+            'n_definition': n_definition,
         })
 
     def __append_distribution_rows(
@@ -3657,6 +4287,135 @@ class ComparativeStats:
             return np.nan, 0
         weighted_mean = float(np.average(values[valid], weights=weights[valid]))
         return weighted_mean, int(round(float(weights[valid].sum())))
+
+    @staticmethod
+    def __weighted_sample_std(
+        values: np.ndarray,
+        weights: np.ndarray,
+    ) -> float:
+        """Return the reliability-weighted sample SD across finite values."""
+        values = np.asarray(values, dtype=float)
+        weights = np.asarray(weights, dtype=float)
+        valid = (
+            np.isfinite(values) & np.isfinite(weights) & (weights > 0)
+        )
+        values = values[valid]
+        weights = weights[valid]
+        if len(values) < 2:
+            return np.nan
+
+        weight_sum = float(np.sum(weights))
+        denominator = weight_sum - float(np.sum(weights ** 2)) / weight_sum
+        if not np.isfinite(denominator) or denominator <= 0:
+            return np.nan
+        weighted_mean = float(np.sum(weights * values) / weight_sum)
+        variance = float(
+            np.sum(weights * (values - weighted_mean) ** 2) / denominator
+        )
+        if variance < 0 and np.isclose(variance, 0):
+            variance = 0.0
+        return float(np.sqrt(variance)) if variance >= 0 else np.nan
+
+    @staticmethod
+    def __particle_cluster_bootstrap_weighted_mean_ci(
+        values: np.ndarray,
+        weights: np.ndarray,
+        resamples: int,
+        confidence_level: float,
+        random_generator: np.random.Generator,
+    ) -> tuple[float, float]:
+        """Return a percentile CI after resampling contributing particles."""
+        values = np.asarray(values, dtype=float)
+        weights = np.asarray(weights, dtype=float)
+        valid = (
+            np.isfinite(values) & np.isfinite(weights) & (weights > 0)
+        )
+        values = values[valid]
+        weights = weights[valid]
+        particle_count = len(values)
+        if particle_count < 2:
+            return np.nan, np.nan
+
+        bootstrap_means = np.empty(resamples, dtype=float)
+        for resample_index in range(resamples):
+            sampled_indices = random_generator.integers(
+                0, particle_count, size=particle_count
+            )
+            sampled_weights = weights[sampled_indices]
+            bootstrap_means[resample_index] = float(
+                np.sum(values[sampled_indices] * sampled_weights) /
+                np.sum(sampled_weights)
+            )
+        tail_probability = (1.0 - confidence_level) / 2.0
+        lower, upper = np.quantile(
+            bootstrap_means,
+            [tail_probability, 1.0 - tail_probability],
+        )
+        return float(lower), float(upper)
+
+    @staticmethod
+    def __sample_sd_n_definition(
+        description: str,
+        sample_count: int,
+        value: float,
+    ) -> str:
+        if sample_count < 2:
+            return (
+                f'{description}; sample SD not calculated because n='
+                f'{sample_count}, but at least 2 observations are required'
+            )
+        if not np.isfinite(value):
+            return (
+                f'{description}; exact pooled sample SD is unavailable '
+                'because a required within-particle SD was not exported'
+            )
+        return f'{description}; sample SD calculated with ddof=1'
+
+    @staticmethod
+    def __sem_n_definition(
+        description: str,
+        sample_count: int,
+        value: float,
+    ) -> str:
+        if sample_count < 2:
+            return (
+                f'{description}; SEM not calculated because n={sample_count}, '
+                'but at least 2 observations are required'
+            )
+        if not np.isfinite(value):
+            return (
+                f'{description}; exact SEM is unavailable because a required '
+                'within-particle SD was not exported'
+            )
+        return f'{description}; SEM is sample SD / sqrt(n)'
+
+    def __velocity_table_1_parameter_values(
+        self,
+        table_1: pd.DataFrame,
+        strain: str,
+        parameter: str,
+    ) -> np.ndarray:
+        """Return finite dataset-level values for one Table 1 parameter."""
+        if table_1.empty or 'strain' not in table_1.columns:
+            return np.array([], dtype=float)
+        parameter_rows = table_1.loc[
+            (table_1['strain'] == strain) &
+            (
+                table_1['Parameter'].astype(str).str.strip() ==
+                parameter
+            )
+        ]
+        if parameter_rows.empty:
+            return np.array([], dtype=float)
+        duplicate_datasets = parameter_rows.loc[
+            parameter_rows.duplicated('dataset_id', keep=False), 'dataset_id'
+        ].astype(str).unique()
+        if len(duplicate_datasets):
+            raise ValueError(
+                f"Velocity Tumble Table 1 contains duplicate '{parameter}' "
+                f'rows for datasets: {", ".join(duplicate_datasets)}.'
+            )
+        return self.__finite_values(parameter_rows['Value'])
 
     def __combine_group_standard_deviation(
         self,
@@ -3908,10 +4667,10 @@ class ComparativeStats:
             ['strain', 'dataset_id'], sort=False
         ):
             v_r, _ = self.__weighted_mean_from_columns(
-                dataset_rows, 'v_R', 'v_R_support_seconds'
+                dataset_rows, 'time_weighted_vR', 'vR_support_seconds'
             )
             v_t, _ = self.__weighted_mean_from_columns(
-                dataset_rows, 'v_T', 'v_T_support_seconds'
+                dataset_rows, 'time_weighted_vT', 'vT_support_seconds'
             )
             t_r, _ = self.__weighted_mean_from_columns(
                 dataset_rows, 't_R', 't_R_interval_count'
@@ -3923,8 +4682,8 @@ class ComparativeStats:
                 'strain': strain,
                 'dataset_id': dataset_id,
                 'particle_count': int(dataset_rows['particle'].nunique()),
-                'v_R': v_r,
-                'v_T': v_t,
+                'pooled_time_weighted_vR': v_r,
+                'pooled_time_weighted_vT': v_t,
                 't_R': t_r,
                 't_T': t_t,
             })
